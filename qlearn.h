@@ -9,13 +9,14 @@
 #include <math.h>
 #include <assert.h>
 #include <stdlib.h>
+#include "nhbot.h"
 
 #define X_MAX VT_W
 #define Y_MAX VT_H
 
-#define MAX_EPOCHS 10000
+#define MAX_EPOCHS 100000
 
-#define MAX_ACTIONS 4
+#define MAX_ACTIONS 8
 
 typedef struct {
    int y;
@@ -27,8 +28,8 @@ typedef struct {
    double QMax;
 } stateAction_t;
 
-#define LEARNING_RATE	0.7	// alpha
-#define DISCOUNT_RATE   0.4	// gamma
+#define LEARNING_RATE	0.8	// alpha
+#define DISCOUNT_RATE   0.9	// gamma
 
 #define EXPLOIT         0   // Choose best Q
 #define EXPLORE         1   // Probabilistically choose best Q
@@ -41,7 +42,12 @@ const pos_t dir[ MAX_ACTIONS ] =
   { -1,  0 },  /* N */
   {  0,  1 },  /* E */
   {  1,  0 },  /* S */
-  {  0, -1 }   /* W */
+  {  0, -1 },  /* W */
+
+  { -1,  1 },  /* NE */
+  { -1, -1 },  /* NW */
+  {  1,  1 },  /* SE */
+  {  1, -1 }   /* SW */
 };
 
 
@@ -49,29 +55,32 @@ uint8_t environment[ Y_MAX * X_MAX ] = {0};
 
 static stateAction_t stateSpace[ Y_MAX ][ X_MAX ];
 
-void nhbot_qlearn_set_env(uint8_t env[Y_MAX*X_MAX])
+void nhbot_qlearn_set_env(NetHackState *nethack_state)
 {
-    memcpy(environment, env, X_MAX*Y_MAX*sizeof(uint8_t));
+    memcpy(environment, nethack_state->ScreenChar, X_MAX*Y_MAX*sizeof(uint8_t));
 }
+
 
 //
 // Return the reward value for the state
 //
-int getReward( uint8_t input )
+int getReward(NetHackState *nethack_state, int x, int y)
 {
-   switch( input )
-   {
-      case '.':
-         // Obstacle, not a legal move
-         return -1;
-      case '$':
-      case '+':
-      case ' ':
-      case '#':
-         // Goal, legal move, 1 reward
-         return 1;
+    uint8_t ch = nethack_state->ScreenChar[y * VT_W + x];
+    uint8_t c = nethack_state->ScreenColor[y * VT_W + x];
+    if (ch == '-' && c == (Brown|0x08)) { return 0; }
+    if (ch == '|' && c == (Brown|0x08)) { return 0; }
+    switch(ch) {
+    case '-':
+    case '|':
+        return -1;
+    case '.':
+        return  0;
+    case '$':
+    case '/':
+    case '>':
+        return  1;
    }
-
    return 0;
 }
 
@@ -96,19 +105,19 @@ void CalculateMaxQ( int y, int x )
 //
 // Identify whether the desired move is legal.
 //
-int legalMove( int y_state, int x_state, int action )
+int legalMove(NetHackState *nethack_state, int y_state, int x_state, int action )
 {
   int y = y_state + dir[ action ].y;
   int x = x_state + dir[ action ].x;
 
-  if ( getReward( environment[ y * X_MAX + x ] ) < 0 ) return 0;
+  if (getReward(nethack_state, x, y) < 0 ) return 0;
   else return 1;
 }
 
 //
 // Choose an action based upon the selection policy.
 //
-int ChooseAgentAction( pos_t *agent, int actionSelection )
+int ChooseAgentAction(NetHackState *nethack_state, pos_t *agent, int actionSelection )
 {
    int action;
 
@@ -129,7 +138,7 @@ int ChooseAgentAction( pos_t *agent, int actionSelection )
    {
       for (int tries = 0; tries< 100; tries++) {
         action = getRand( MAX_ACTIONS );
-        if (legalMove( agent->y, agent->x, action )) {
+        if (legalMove(nethack_state, agent->y, agent->x, action )) {
             break;
         }
       }
@@ -141,7 +150,7 @@ int ChooseAgentAction( pos_t *agent, int actionSelection )
 //
 // Update the agent using the Q-value function.
 //
-void UpdateAgent( pos_t *agent, int action )
+void UpdateAgent(NetHackState *nethack_state, pos_t *agent, int action )
 {
    int newy = agent->y + dir[ action ].y;
    int newx = agent->x + dir[ action ].x;
@@ -152,7 +161,7 @@ void UpdateAgent( pos_t *agent, int action )
        return;
    }
 
-   double reward = (double)getReward( environment[ newy * X_MAX + newx ] );
+   double reward = (double)getReward(nethack_state, newx, newy);
 
    // Evaluate Q value 
    stateSpace[ agent->y ][ agent->x ].QVal[ action ] += 
@@ -171,15 +180,11 @@ void UpdateAgent( pos_t *agent, int action )
    return;
 }
 
-void nhbot_qlearn(pos_t *agent)
+void nhbot_qlearn(NetHackState *nethack_state, pos_t *agent)
 {
-   for ( int epochs = 0 ; epochs < MAX_EPOCHS ; epochs++ )
-   {
-      // Select the action for the agent.
-      int action = ChooseAgentAction( agent, EXPLORE );
-
-      // Update the agent based upon the action.
-      UpdateAgent( agent, action );
+   for (int epochs = 0; epochs < MAX_EPOCHS; epochs++) {
+      int action = ChooseAgentAction(nethack_state, agent, EXPLORE );
+      UpdateAgent(nethack_state, agent, action);
    }
 }
 #endif

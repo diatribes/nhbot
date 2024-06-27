@@ -26,6 +26,18 @@ if (!(x)) {\
     goto error;\
 }
 
+typedef enum {
+	Black = 1,
+	Red,
+	Green,
+	Brown,
+	Blue,
+	Magenta,
+	Cyan,
+	Gray,
+	None,
+} NetHackColor;
+
 
 typedef enum {
     CompassDirection_N = 0,
@@ -44,7 +56,6 @@ typedef enum {
     TextCharacters_n,
     TextCharacters_q,
 
-    Command_DoNothing,
     NetHackActionEnum_Count,
 
 } NetHackActionEnum;
@@ -92,7 +103,7 @@ typedef struct {
     int QMap5x5[5*5];
 } NetHackState;
 
-struct io_thread_params {
+struct io_params {
     pid_t pid;
     struct PTY pty;
     TMT *vt;

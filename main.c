@@ -25,10 +25,10 @@ int master_write_fd;
 NetHackState nethack_state = {0};
 
 // Kill NetHack
-static int nhbot_shutdown(void)
+static void nhbot_shutdown(void)
 {
     kill(pid, SIGTERM);
-    return 0;
+    exit(0);
 }
 
 // Handle signals
@@ -54,17 +54,34 @@ static inline int randrange (int lower, int upper)
 }
 
 // Write a char to NetHack stdin
-ssize_t nhbot_write(int fd, uint8_t *c, size_t len)
+static ssize_t nhbot_write(int fd, uint8_t *c, size_t len)
 {
+    ssize_t nread;
+    fd_set writeable;
     ssize_t result = -1;
-    check((result = write(fd, c, len)) == (ssize_t)len);
+
+    int maxfd = fd;
+    FD_ZERO(&writeable);
+    FD_SET(fd, &writeable);
+    struct timeval tv = {0, 100};
+    if (select(maxfd + 1, NULL, &writeable, NULL, &tv) == -1) {
+        fprintf(stderr, "select():%s:%d ", __FILE__, __LINE__);
+        return result;
+    }
+
+    if (FD_ISSET(fd, &writeable)) {
+        check((result = write(fd, c, len)) == (ssize_t)len);
+        return result;
+    }
+
     return result;
+
 error:
     return result;
 }
 
 // Write the ascii (ansi stripped) NetHack screen to stdout
-static int write_output_nethack(NetHackState *nethack_state)
+static int write_output(NetHackState *nethack_state)
 {
     return write(STDOUT_FILENO, nethack_state->ScreenChar,
                  VT_W*VT_H*sizeof(uint8_t));
@@ -193,9 +210,107 @@ static int screen_text_bl_int(int hstart, uint8_t *haystack, int hlen,
     return atoi(buf);
 }
 
+static void screen_gather_blstats(NetHackState *nethack_state)
+{
+
+    // "St:"
+    int guess = 1;
+    int offset = (VT_H-1) * VT_W + guess;
+    nethack_state->BlStat.St = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "St:", 3);
+    // "Dx:"
+    guess = 7;
+    offset = (VT_H-1) * VT_W + guess;
+    nethack_state->BlStat.Dx = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "Dx:", 3);
+    // "Co:"
+    guess = 12;
+    offset = (VT_H-1) * VT_W + guess;
+    nethack_state->BlStat.Co = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "Co:", 3);
+    // "In:"
+    guess = 18;
+    offset = (VT_H-1) * VT_W + guess;
+    nethack_state->BlStat.In = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "In:", 3);
+    // "Wi:"
+    guess = 23;
+    offset = (VT_H-1) * VT_W + guess;
+    nethack_state->BlStat.Wi = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "Wi:", 3);
+    // "Ch:"
+    guess = 29;
+    offset = (VT_H-1) * VT_W + guess;
+    nethack_state->BlStat.Ch = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "Ch:", 3);
+    // "Dlvl:"
+    guess = 0;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.Dlvl = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "Dlvl:", 5);
+
+    // "$:"
+    guess = 6;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.Money = screen_text_bl_int(
+                                   offset, nethack_state->ScreenChar,
+                                   VT_H*VT_W, "$:", 2);
+
+    // "HP"
+    guess = 11;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.HP = screen_text_bl_int(
+                                  offset, nethack_state->ScreenChar,
+                                  VT_H*VT_W, "HP:", 3);
+    // "Pw"
+    guess = 18;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.Pw = screen_text_bl_int(
+                                  offset, nethack_state->ScreenChar,
+                                  VT_H*VT_W, "Pw:", 3);
+    // "Ac"
+    guess = 27;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.Ac = screen_text_bl_int(
+                                  offset, nethack_state->ScreenChar,
+                                  VT_H*VT_W, "Ac:", 3);
+    // "Xp"
+    guess = 32;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.Xp = screen_text_bl_int(
+                                  offset, nethack_state->ScreenChar,
+                                  VT_H*VT_W, "Xp:", 3);
+    // "T"
+    guess = 38;
+    offset = (VT_H-0) * VT_W + guess;
+    nethack_state->BlStat.T = screen_text_bl_int(
+                                  offset, nethack_state->ScreenChar,
+                                  VT_H*VT_W, "T:", 2);
+}
+
+static void screen_locate_player(NetHackState *nethack_state)
+{
+    nethack_state->PlayerRow = -1;
+    nethack_state->PlayerCol = -1;
+    for (int i = 0; i < VT_W*VT_H; i++) {
+        if(nethack_state->ScreenChar[i] == '@'
+            && nethack_state->ScreenColor[i]&0x08) {
+            nethack_state->PlayerRow = i / VT_W;
+            nethack_state->PlayerCol= i % VT_W;
+        }
+    }
+}
+
 // Watch for text that requires user input,
 // send input, if necessary
-static void screen_text_process(NetHackState *nethack_state, int fd)
+static void screen_respond_prompts(NetHackState *nethack_state, int fd)
 {
     char buf[64] = {0};
 
@@ -283,113 +398,8 @@ static void screen_text_process(NetHackState *nethack_state, int fd)
     // "What do you want"
     if (screen_text_exists(nethack_state->ScreenChar,
         VT_W*VT_H, what_do_you_want_text, what_do_you_want_text_len)) {
-        nhbot_write(fd, (uint8_t*)" ", 1);
         nhbot_write(fd, (uint8_t*)"\n", 1);
-    }
-
-    // "St:"
-    int guess = 1;
-    int offset = (VT_H-1) * VT_W + guess;
-    nethack_state->BlStat.St = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "St:", 3);
-    // "Dx:"
-    guess = 7;
-    offset = (VT_H-1) * VT_W + guess;
-    nethack_state->BlStat.Dx = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "Dx:", 3);
-    // "Co:"
-    guess = 12;
-    offset = (VT_H-1) * VT_W + guess;
-    nethack_state->BlStat.Co = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "Co:", 3);
-    // "In:"
-    guess = 18;
-    offset = (VT_H-1) * VT_W + guess;
-    nethack_state->BlStat.In = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "In:", 3);
-    // "Wi:"
-    guess = 23;
-    offset = (VT_H-1) * VT_W + guess;
-    nethack_state->BlStat.Wi = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "Wi:", 3);
-    // "Ch:"
-    guess = 29;
-    offset = (VT_H-1) * VT_W + guess;
-    nethack_state->BlStat.Ch = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "Ch:", 3);
-    // "Dlvl:"
-    guess = 0;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.Dlvl = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "Dlvl:", 5);
-
-    // "$:"
-    guess = 6;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.Money = screen_text_bl_int(
-                                   offset, nethack_state->ScreenChar,
-                                   VT_H*VT_W, "$:", 2);
-
-    // "HP"
-    guess = 11;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.HP = screen_text_bl_int(
-                                  offset, nethack_state->ScreenChar,
-                                  VT_H*VT_W, "HP:", 3);
-    // "Pw"
-    guess = 18;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.Pw = screen_text_bl_int(
-                                  offset, nethack_state->ScreenChar,
-                                  VT_H*VT_W, "Pw:", 3);
-    // "Ac"
-    guess = 27;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.Ac = screen_text_bl_int(
-                                  offset, nethack_state->ScreenChar,
-                                  VT_H*VT_W, "Ac:", 3);
-    // "Xp"
-    guess = 32;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.Xp = screen_text_bl_int(
-                                  offset, nethack_state->ScreenChar,
-                                  VT_H*VT_W, "Xp:", 3);
-    // "T"
-    guess = 38;
-    offset = (VT_H-0) * VT_W + guess;
-    nethack_state->BlStat.T = screen_text_bl_int(
-                                  offset, nethack_state->ScreenChar,
-                                  VT_H*VT_W, "T:", 2);
-
-    nethack_state->PlayerRow = -1;
-    nethack_state->PlayerCol = -1;
-    for (int i = 0; i < VT_W*VT_H; i++) {
-        if(nethack_state->ScreenChar[i] == '@'
-            && nethack_state->ScreenColor[i]&0x08) {
-            nethack_state->PlayerRow = i / VT_W;
-            nethack_state->PlayerCol= i % VT_W;
-        }
-    }
-}
-
-// Construct a binary qmap
-static void nhbot_make_qmap(NetHackState *nethack_state, uint8_t out[VT_W*VT_H])
-{
-    int start_x = 0;
-    int start_y = 0;
-    for (int i = 0; i < VT_W; ++i) {
-        for (int j = 0; j < VT_H; ++j) {
-            int screen_x = start_x + i;
-            int screen_y = start_y + j;
-            out[j * VT_W + i] = nethack_state->ScreenChar[screen_y * VT_W + screen_x];
-        }
+        nhbot_write(fd, (uint8_t*)"\n", 1);
     }
 }
 
@@ -412,7 +422,7 @@ static int action_epilogue(NetHackActionEnum action, int fd)
 {
     switch(action) {
     case Command_EAT:
-        switch(randrange(0, 6)) {
+        switch(randrange(0, 2)) {
         case 0:
             nhbot_write(fd, (uint8_t*)"f", sizeof(uint8_t));
             break;
@@ -421,12 +431,6 @@ static int action_epilogue(NetHackActionEnum action, int fd)
             break;
         case 2:
             nhbot_write(fd, (uint8_t*)"h", sizeof(uint8_t));
-            break;
-        case 3:
-            //nhbot_write(fd, (uint8_t*)"i", sizeof(uint8_t));
-            break;
-        case 4:
-            nhbot_write(fd, (uint8_t*)"j", sizeof(uint8_t));
             break;
         }
         break;
@@ -446,10 +450,6 @@ static int nhbot_perform_action(NetHackActionEnum action, int fd)
 {
     int result = -1;
 
-    if (action == Command_DoNothing) {
-        return 0;
-    }
-
     // Check for a valid action
     check(action >= 0 && action < NetHackActionEnum_Count);
 
@@ -457,8 +457,8 @@ static int nhbot_perform_action(NetHackActionEnum action, int fd)
 
     // Write the action character to fd
     uint8_t *c = &NetHackActionLookup[action].ActionChar;
-    size_t len = sizeof(uint8_t);
-    check(nhbot_write(fd, c, len) != -1);
+    ssize_t len = sizeof(uint8_t);
+    check(nhbot_write(fd, c, len) == len);
 
     check(action_epilogue(action, fd) != -1);
 
@@ -473,88 +473,108 @@ static int nhbot_action(NetHackActionEnum actionId)
     return nhbot_perform_action(actionId, master_write_fd);
 }
 
+static void send_input(NetHackState *nethack_state, int fd)
+{
+    pos_t agent;
+
+    screen_respond_prompts(nethack_state, fd);
+
+    if (nethack_state->PromptMore) {
+        nhbot_action(TextCharacters_SPACE);
+        nhbot_action(TextCharacters_SPACE);
+    } else if(nethack_state->PromptYn) {
+        nhbot_action(TextCharacters_n);
+    }
+
+    if (nethack_state->StatusHungry) {
+        nhbot_action(Command_EAT);
+    }
+    if (nethack_state->StatusBurdened) {
+        nhbot_action(Command_DROP);
+    }
+
+    if (nethack_state->PlayerRow != -1
+     && nethack_state->PlayerCol != -1) {
+        agent.y = nethack_state->PlayerRow;
+        agent.x = nethack_state->PlayerCol;
+        nhbot_qlearn_set_env(nethack_state);
+        nhbot_qlearn(nethack_state, &agent);
+        switch(ChooseAgentAction(nethack_state, &agent, EXPLORE)) {
+        case 0:
+            nhbot_action(CompassDirection_N);
+            break;
+        case 1:
+            nhbot_action(CompassDirection_E);
+            break;
+        case 2:
+            nhbot_action(CompassDirection_S);
+            break;
+        case 3:
+            nhbot_action(CompassDirection_W);
+            break;
+        case 4:
+            nhbot_action(CompassDirection_NE);
+            break;
+        case 5:
+            nhbot_action(CompassDirection_NW);
+            break;
+        case 6:
+            nhbot_action(CompassDirection_SE);
+            break;
+        case 7:
+            nhbot_action(CompassDirection_SW);
+            break;
+        }
+    }
+}
+
+static void screen_wait_change(struct io_params *params)
+{
+    ssize_t nread;
+    fd_set readable;
+    int maxfd = params->pty.master;
+    struct timeval tv = {0, 1000 * 32};
+    static char buf[BUFLEN];
+    
+    struct PTY pty = params->pty;
+    TMT *vt = params->vt;
+
+    FD_ZERO(&readable);
+    FD_SET(pty.master, &readable);
+    if (select(maxfd + 1, &readable, NULL, NULL, &tv) == -1) {
+        fprintf(stderr, "select():%s:%d ", __FILE__, __LINE__);
+        return;
+    }
+
+    if (kill(params->pid, 0) == -1) {
+        return;
+    }
+
+    if (FD_ISSET(pty.master, &readable)) {
+        if ((nread = read(pty.master, buf, BUFLEN)) <= 0) {
+            fprintf(stderr, "read():%s:%d ", __FILE__, __LINE__);
+            return;
+        }
+        tmt_write(vt, buf, nread);
+    }
+}
+
 // Main io loop
 // * Wait for screen change
 // * Process screen text
 // * Genreate qmap
-// * Proces qmap
+// * Process qmap
 // * Send resulting action to NetHack
-static void nhbot_loop(void *params)
+static void nhbot_loop(struct io_params *params)
 {
-    int maxfd;
     ssize_t nread;
-    fd_set readable;
-    pos_t agent;
-    int qmap[5*5];
-    static char buf[BUFLEN];
-    struct io_thread_params *p = (struct io_thread_params*)params;
-    struct timeval tv = {0, 1000*100};
-    NetHackState *nethack_state = p->nethack_state;
-
-    struct PTY pty = p->pty;
-    TMT *vt = p->vt;
-
-    maxfd = pty.master;
+    NetHackState *nethack_state = params->nethack_state;
     for(;;) {
-        FD_ZERO(&readable);
-        FD_SET(pty.master, &readable);
-        if (select(maxfd + 1, &readable, NULL, NULL, &tv) == -1) {
-            fprintf(stderr, "select():%s:%d ", __FILE__, __LINE__);
-            continue;
-        }
-
-        if (kill(p->pid, 0) == -1) {
-            return;
-        }
-
-        if (FD_ISSET(pty.master, &readable)) {
-            if ((nread = read(pty.master, buf, BUFLEN)) <= 0) {
-                fprintf(stderr, "read():%s:%d ", __FILE__, __LINE__);
-                continue;
-            }
-            tmt_write(vt, buf, nread);
-        }
-
-        screen_text_process(nethack_state, pty.master);
-
-        usleep(1000*10);
-        if (nethack_state->PlayerRow != -1
-                && nethack_state->PlayerCol != -1) {
-            agent.y = nethack_state->PlayerRow;
-            agent.x = nethack_state->PlayerCol;
-            nhbot_make_qmap(nethack_state, nethack_state->ScreenChar);
-            nhbot_qlearn_set_env(nethack_state->ScreenChar);
-            nhbot_qlearn(&agent);
-            switch(ChooseAgentAction(&agent, EXPLOIT)) {
-            case 0:
-                nhbot_action(CompassDirection_N);
-                break;
-            case 1:
-                nhbot_action(CompassDirection_E);
-                break;
-            case 2:
-                nhbot_action(CompassDirection_S);
-                break;
-            case 3:
-                nhbot_action(CompassDirection_W);
-                break;
-            }
-
-            if (nethack_state->PromptMore) {
-                nhbot_action(TextCharacters_SPACE);
-            }
-            else if(nethack_state->PromptYn) {
-                nhbot_action(TextCharacters_n);
-            }
-            else if (nethack_state->StatusHungry) {
-                nhbot_action(Command_EAT);
-            }
-            else if (nethack_state->StatusBurdened) {
-                nhbot_action(Command_DROP);
-            }
-        }
-
-        write_output_nethack(nethack_state);
+        send_input(nethack_state, params->pty.master);
+        screen_wait_change(params);
+        screen_gather_blstats(nethack_state);
+        screen_locate_player(nethack_state);
+        write_output(nethack_state);
     }
 
     return;
@@ -578,7 +598,7 @@ error:
 }
 
 // Parent process, i.e., io loop
-static int fork_handle_parent(struct io_thread_params *params)
+static int fork_handle_parent(struct io_params *params)
 {
     int wait_status;
     pthread_t io_thread_id;
@@ -587,9 +607,7 @@ static int fork_handle_parent(struct io_thread_params *params)
     check(write(master_write_fd, " ", sizeof(char)) != -1)
     check(write(master_write_fd, " ", sizeof(char)) != -1)
     nhbot_loop(params);
-    
     waitpid(pid, &wait_status, WUNTRACED);
-    //pthread_join(io_thread_id, NULL);
     nhbot_shutdown();
     puts("nhbot: exiting...");
 
@@ -626,7 +644,7 @@ static int nhbot_run(const char *nethack_path, const char *env_term,
     check((tmt_vt = tmt_open(VT_H, VT_W, nhbot_tmt_callback, &nethack_state, NULL)));
 
     // Initialize thread params
-    struct io_thread_params io_thread_params = {
+    struct io_params io_params = {
         .nethack_path = nethack_path,
         .env_term = env_term,
         .env_nethackoptions = env_nethackoptions,
@@ -642,7 +660,7 @@ static int nhbot_run(const char *nethack_path, const char *env_term,
         check(fork_handle_child(&pty, nethack_path, env) != -1);
     } else if (pid > 0) {
         // Parent process
-        check(fork_handle_parent(&io_thread_params) != -1);
+        check(fork_handle_parent(&io_params) != -1);
     }
 
     return 0;
